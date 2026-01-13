@@ -1,6 +1,6 @@
 # @noble/hashes/blake2 Import Error Reproduction
 
-This repository reproduces a dependency resolution issue with `@chainlink/ccip-sdk` when used alongside `ethers` v5.
+This repository reproduces a dependency resolution issue with `@chainlink/ccip-sdk` when ethers version conflicts cause `@noble/hashes@1.3.2` to be nested under the SDK.
 
 ## Problem
 
@@ -8,32 +8,34 @@ The SDK imports `@noble/hashes/blake2`, a subpath that only exists in `@noble/ha
 
 ## Root Cause
 
-`@chainlink/ccip-sdk@0.93.0` has two relevant dependencies:
-- `@noble/hashes@^1.8.0` (direct) — for the `blake2` import
-- `ethers@6.16.0` — which transitively depends on `@noble/hashes@1.3.2`
+`@chainlink/ccip-sdk@0.93.0` depends on `ethers@6.16.0`, which transitively depends on `@noble/hashes@1.3.2`.
+
+**Any ethers version mismatch** causes npm to nest ethers (and its `@noble/hashes@1.3.2`) under the SDK:
+- ethers v5 vs SDK's ethers v6.16.0
+- ethers v6.13.0 vs SDK's ethers v6.16.0
 
 ### Why npm hoists differently
 
-**npm can only share packages at the top level when versions are compatible.** When versions conflict, npm nests the incompatible version inside the package that requires it.
+npm can only share packages at the top level when versions are compatible. When versions conflict, npm nests the incompatible version inside the package that requires it.
 
-**When your project uses ethers v5:**
+**When your project uses ethers v5 (or a different ethers v6 version):**
 
-1. Your `ethers@5.x` goes to top level (direct dependency wins)
+1. Your ethers goes to top level (direct dependency wins)
 2. SDK's `ethers@6.16.0` **conflicts** → npm nests it under `@chainlink/ccip-sdk/node_modules/`
 3. The nested `ethers@6.16.0` brings its own `@noble/hashes@1.3.2`, also nested
 4. When SDK imports `@noble/hashes/blake2`, Node.js resolves **from the SDK's directory upward**
 5. It finds the nested `@noble/hashes@1.3.2` first → **fails** (no `./blake2` export)
 
-**When your project uses ethers v6:**
+**When your project uses ethers v6.16.0 (exact match):**
 
-1. Your `ethers@6.x` and SDK's `ethers@6.16.0` are **compatible** → shared at top level
-2. SDK's direct `@noble/hashes@^1.8.0` goes to top level
+1. Your `ethers@6.16.0` and SDK's `ethers@6.16.0` are **identical** → shared at top level
+2. `@noble/hashes@1.8.0` (from SDK's other deps) goes to top level
 3. ethers' `@noble/hashes@1.3.2` is nested under `ethers/node_modules/` only
 4. When SDK imports `@noble/hashes/blake2`, it resolves to top-level `@noble/hashes@1.8.0` → **works**
 
 ## Expected node_modules Structure
 
-### ethers v5 project (FAILS)
+### ethers v5 (FAILS)
 
 ```
 node_modules/
@@ -45,7 +47,19 @@ node_modules/
 └── ethers@5.8.0                   ← your direct dependency
 ```
 
-### ethers v6 project (WORKS)
+### ethers v6 mismatch (FAILS)
+
+```
+node_modules/
+├── @chainlink/ccip-sdk/
+│   └── node_modules/
+│       ├── @noble/hashes@1.3.2    ← SDK resolves HERE (lacks ./blake2) ❌
+│       └── ethers@6.16.0
+├── @noble/hashes@1.8.0            ← has ./blake2, but SDK can't see it
+└── ethers@6.13.0                  ← your direct dependency (different v6)
+```
+
+### ethers v6.16.0 exact match (WORKS)
 
 ```
 node_modules/
@@ -71,7 +85,22 @@ Error [ERR_PACKAGE_PATH_NOT_EXPORTED]: Package subpath './blake2' is not defined
 in node_modules/@chainlink/ccip-sdk/node_modules/@noble/hashes/package.json
 ```
 
-### ethers v6 (works)
+### ethers v6 mismatch (fails)
+
+```bash
+cd blake2-npm-ethersv6mismatch
+npm install
+npx tsx test.ts
+```
+
+**Expected error:**
+
+```
+Error [ERR_PACKAGE_PATH_NOT_EXPORTED]: Package subpath './blake2' is not defined by "exports"
+in node_modules/@chainlink/ccip-sdk/node_modules/@noble/hashes/package.json
+```
+
+### ethers v6.16.0 exact match (works)
 
 ```bash
 cd blake2-npm-ethersv6
@@ -105,7 +134,25 @@ cat node_modules/ethers/package.json | jq .version
 # Output: "5.8.0"
 ```
 
-### ethers v6
+### ethers v6 mismatch
+
+```bash
+cd blake2-npm-ethersv6mismatch
+
+# SDK has nested @noble/hashes
+cat node_modules/@chainlink/ccip-sdk/node_modules/@noble/hashes/package.json | jq .version
+# Output: "1.3.2"
+
+# SDK has nested ethers v6.16.0
+cat node_modules/@chainlink/ccip-sdk/node_modules/ethers/package.json | jq .version
+# Output: "6.16.0"
+
+# Top-level ethers is v6.13.0
+cat node_modules/ethers/package.json | jq .version
+# Output: "6.13.0"
+```
+
+### ethers v6.16.0 exact match
 
 ```bash
 cd blake2-npm-ethersv6
