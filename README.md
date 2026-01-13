@@ -8,20 +8,51 @@ The SDK imports `@noble/hashes/blake2`, a subpath that only exists in `@noble/ha
 
 ## Root Cause
 
-`@chainlink/ccip-sdk@0.93.0` depends on `ethers@6.16.0`, which depends on `@noble/hashes@1.3.2`.
+`@chainlink/ccip-sdk@0.93.0` has two relevant dependencies:
+- `@noble/hashes@^1.8.0` (direct) — for the `blake2` import
+- `ethers@6.16.0` — which transitively depends on `@noble/hashes@1.3.2`
 
-When your project uses ethers v5:
+### Why npm hoists differently
 
-- npm places ethers v5 at top level (your direct dependency)
-- npm nests ethers v6 under the SDK
-- `@noble/hashes@1.3.2` follows ethers v6 and gets nested under the SDK
-- SDK imports resolve to the nested v1.3.2, which lacks `./blake2`
+**npm can only share packages at the top level when versions are compatible.** When versions conflict, npm nests the incompatible version inside the package that requires it.
 
-When your project uses ethers v6:
+**When your project uses ethers v5:**
 
-- npm shares ethers v6 at top level
-- `@noble/hashes@1.3.2` nests under ethers only
-- SDK imports resolve to top-level `@noble/hashes@1.8.0`
+1. Your `ethers@5.x` goes to top level (direct dependency wins)
+2. SDK's `ethers@6.16.0` **conflicts** → npm nests it under `@chainlink/ccip-sdk/node_modules/`
+3. The nested `ethers@6.16.0` brings its own `@noble/hashes@1.3.2`, also nested
+4. When SDK imports `@noble/hashes/blake2`, Node.js resolves **from the SDK's directory upward**
+5. It finds the nested `@noble/hashes@1.3.2` first → **fails** (no `./blake2` export)
+
+**When your project uses ethers v6:**
+
+1. Your `ethers@6.x` and SDK's `ethers@6.16.0` are **compatible** → shared at top level
+2. SDK's direct `@noble/hashes@^1.8.0` goes to top level
+3. ethers' `@noble/hashes@1.3.2` is nested under `ethers/node_modules/` only
+4. When SDK imports `@noble/hashes/blake2`, it resolves to top-level `@noble/hashes@1.8.0` → **works**
+
+## Expected node_modules Structure
+
+### ethers v5 project (FAILS)
+
+```
+node_modules/
+├── @chainlink/ccip-sdk/
+│   └── node_modules/
+│       ├── @noble/hashes@1.3.2    ← SDK resolves HERE (lacks ./blake2) ❌
+│       └── ethers@6.16.0
+├── @noble/hashes@1.8.0            ← has ./blake2, but SDK can't see it
+└── ethers@5.8.0                   ← your direct dependency
+```
+
+### ethers v6 project (WORKS)
+
+```
+node_modules/
+├── @chainlink/ccip-sdk/           ← no nested node_modules
+├── @noble/hashes@1.8.0            ← SDK resolves HERE (has ./blake2) ✅
+└── ethers@6.16.0                  ← shared with SDK
+```
 
 ## Reproduction Steps
 
